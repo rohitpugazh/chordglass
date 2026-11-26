@@ -39,7 +39,29 @@ export interface AppSnapshot {
   demo: boolean
 }
 
+export interface PollSample {
+  at: number
+  trackId: string
+  /** Spotify's position minus our extrapolated position, ms. */
+  errMs: number
+  rttMs: number
+  result: 'jump' | 'adjust'
+  playing: boolean
+}
+
+export interface TrackSeen {
+  at: number
+  id: string
+  title: string
+  artists: string
+  durationMs: number
+  /** "chordonomicon untimed, 122 chords, key E" / "missing" / "error: ..." */
+  chart: string
+}
+
 export class App {
+  /** What the app saw, for the phone page's diagnostics panel. */
+  readonly diag = { polls: [] as PollSample[], tracks: [] as TrackSeen[], pollErrors: 0, lastError: '' }
   readonly screen = new Screen()
   readonly clock = new PlaybackClock()
   private playback: Playback | null = null
@@ -150,6 +172,8 @@ export class App {
       } else {
         this.failures++
         this.problem = e instanceof SpotifyError ? e.message : (e as Error).message
+        this.diag.pollErrors++
+        this.diag.lastError = this.problem
       }
       debug('poll failed', e)
     }
@@ -169,8 +193,14 @@ export class App {
       trackId: p.trackId, progressMs: p.progressMs, durationMs: p.durationMs,
       isPlaying: p.isPlaying, sampledAt: p.sampledAt, rttMs: p.rttMs,
     })
+    this.diag.polls.push({
+      at: Date.now(), trackId: p.trackId, errMs: Math.round(this.clock.lastErrorMs), rttMs: Math.round(p.rttMs), result, playing: p.isPlaying,
+    })
+    if (this.diag.polls.length > 300) this.diag.polls.shift()
     if (p.trackId !== before) {
       debug('track', p.title, p.trackId)
+      this.diag.tracks.push({ at: Date.now(), id: p.trackId, title: p.title, artists: p.artists, durationMs: p.durationMs, chart: 'looking up' })
+      if (this.diag.tracks.length > 100) this.diag.tracks.shift()
       this.view = this.view === 'info' ? 'info' : 'main'
       this.record = null
       this.sectionIndex = 0
@@ -203,6 +233,13 @@ export class App {
       this.chartState = { status: 'ready', chart: found.chart, info: songInfo(found.chart, this.clock.durationMs, prefs.transpose) }
     } else if (found.status === 'missing') this.chartState = { status: 'missing' }
     else this.chartState = { status: 'error', message: found.message }
+    const seen = [...this.diag.tracks].reverse().find(t => t.id === id)
+    if (seen) {
+      const cs = this.chartState
+      seen.chart = cs.status === 'ready'
+        ? `${cs.chart.source} ${isTimed(cs.chart) ? 'timed' : 'untimed'}, ${cs.chart.events.length} chords, key ${cs.info.shapeKey}`
+        : cs.status === 'error' ? `error: ${cs.message}` : cs.status
+    }
     this.render()
   }
 
@@ -395,6 +432,19 @@ export class App {
     else if (type === Ev.SCROLL_BOTTOM_EVENT) this.onSwipe(prefs.swapSwipes ? 'up' : 'down')
   }
 
+  /** Gestures from the phone page's buttons when there are no glasses (browser testing). */
+  simulate(gesture: 'tap' | 'double' | 'up' | 'down' | number) {
+    if (typeof gesture === 'number') return void this.onMenu(gesture)
+    if (gesture === 'tap') this.onTap()
+    else if (gesture === 'double') this.onDoubleTap()
+    else this.onSwipe(prefs.swapSwipes ? (gesture === 'up' ? 'down' : 'up') : gesture)
+  }
+
+  /** The hold-menu items for the current screen, for the phone page's buttons. */
+  menuItems() {
+    return this.page().menu
+  }
+
   private onTap() {
     if (this.view === 'record') return this.stampChord()
     if (this.view === 'info') { this.view = 'main'; return this.render() }
@@ -409,7 +459,7 @@ export class App {
     if (this.view === 'record') return void this.finishRecording(true)
     if (this.view === 'info') { this.view = 'main'; return this.render() }
     // Root screen: Even Hub requires double-tap to open the exit dialog.
-    void serial(b => b.shutDownPageContainer(1))
+    void serial(b => b.shutDownPageContainer(1)).catch(() => {})
   }
 
   private onSwipe(dir: 'up' | 'down') {

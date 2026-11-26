@@ -23,6 +23,16 @@ const TEMPLATE = `
     <h2>On your glasses</h2>
     <div class="g2-wrap" id="preview"></div>
     <p class="muted" id="now"></p>
+    <div id="sim-controls" hidden>
+      <div class="row">
+        <button data-g="tap">Tap</button>
+        <button data-g="up">Swipe up</button>
+        <button data-g="down">Swipe down</button>
+        <button data-g="double">Double-tap</button>
+      </div>
+      <div class="row" id="sim-menu"></div>
+      <small>No glasses here, so these buttons stand in for the ring. The second row is the hold menu.</small>
+    </div>
   </section>
 
   <section class="card" id="spotify">
@@ -80,6 +90,14 @@ capo: 2
 [Verse 1] 0:05.0
 Em C G D x2     (untimed chords are spread between timed ones)</pre>
       <p class="muted">Untimed chart? On the glasses hold for the menu &gt; <b>Record chord timings</b>, restart the song and tap the ring as each chord starts.</p>
+    </details>
+  </section>
+
+  <section class="card">
+    <details id="diag-box">
+      <summary><b>Diagnostics</b> <span class="muted" id="diag-summary"></span></summary>
+      <pre id="diag" style="white-space:pre-wrap;font-size:12px;margin:8px 0"></pre>
+      <div class="row"><button id="diag-copy">Copy diagnostics</button></div>
     </details>
   </section>
 
@@ -229,10 +247,74 @@ export function mountPhoneUi(app: App, opts: { signInError: string | null; inEve
   const demo = $<HTMLInputElement>('#demo')
   demo.onchange = () => app.setDemo(demo.checked)
 
+  // ---------- Browser stand-ins for the ring ----------
+  ;(window as unknown as { chordglass: App }).chordglass = app
+  if (!opts.inEvenApp) {
+    $('#sim-controls').hidden = false
+    document.querySelectorAll<HTMLButtonElement>('#sim-controls [data-g]').forEach(b => {
+      b.onclick = () => app.simulate(b.dataset.g as 'tap' | 'double' | 'up' | 'down')
+    })
+  }
+  let menuKey = ''
+  const renderMenu = () => {
+    if (opts.inEvenApp) return
+    const items = app.menuItems()
+    const key = JSON.stringify(items)
+    if (key === menuKey) return
+    menuKey = key
+    const row = $('#sim-menu')
+    row.replaceChildren(...items.map(m => {
+      const b = document.createElement('button')
+      b.textContent = m.label
+      b.onclick = () => app.simulate(m.id)
+      return b
+    }))
+  }
+
+  // ---------- Diagnostics ----------
+  const diagText = () => {
+    const d = app.diag
+    const playing = d.polls.filter(p => p.playing && p.result === 'adjust').slice(-30)
+    const abs = playing.map(p => Math.abs(p.errMs)).sort((a, b) => a - b)
+    const median = abs.length ? abs[Math.floor(abs.length / 2)] : 0
+    const rtts = d.polls.slice(-30).map(p => p.rttMs)
+    const avgRtt = rtts.length ? Math.round(rtts.reduce((a, b) => a + b, 0) / rtts.length) : 0
+    const jumps = d.polls.filter(p => p.result === 'jump').length
+    const found = d.tracks.filter(t => /^(user|chordonomicon)/.test(t.chart)).length
+    const summary = `${d.tracks.length} tracks, ${found} with chords · drift ${median} ms median · trip ${avgRtt} ms`
+    const lines = [
+      `Spotify checks: ${d.polls.length} (${jumps} jumps: track change, seek or pause) · errors ${d.pollErrors}${d.lastError ? ' (' + d.lastError + ')' : ''}`,
+      `Clock drift at each check (last ${abs.length} while playing): median ${median} ms, max ${abs[abs.length - 1] ?? 0} ms`,
+      `Request round trip: ${avgRtt} ms average · sync lead ${prefs.leadMs} ms`,
+      '',
+      'Tracks (newest first):',
+      ...[...d.tracks].reverse().slice(0, 30).map(t =>
+        `${new Date(t.at).toLocaleTimeString()}  ${t.title} - ${t.artists}  [${t.id}]\n    -> ${t.chart}`),
+    ]
+    return { summary, text: lines.join('\n') }
+  }
+  let diagAt = 0
+  const renderDiag = () => {
+    if (Date.now() - diagAt < 1000) return
+    diagAt = Date.now()
+    const { summary, text } = diagText()
+    $('#diag-summary').textContent = summary
+    if (($('#diag-box') as HTMLDetailsElement).open) $('#diag').textContent = text
+  }
+  $('#diag-copy').onclick = () => {
+    const json = JSON.stringify({ ...app.diag, prefs, at: new Date().toISOString() }, null, 1)
+    void navigator.clipboard?.writeText(json).then(
+      () => { $('#diag-summary').textContent = 'copied' },
+      () => { $('#diag').textContent = json },
+    )
+  }
+
   // ---------- Live status ----------
   let lastStatusKey = ''
   app.subscribe(() => {
     fit()
+    renderMenu()
+    renderDiag()
     const s = app.snapshot()
     demo.checked = s.demo
     lead.value = String(prefs.leadMs)
