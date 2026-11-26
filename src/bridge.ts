@@ -25,9 +25,22 @@ export function serial<T>(fn: (b: EvenAppBridge) => Promise<T>, timeoutMs = 6000
   return run
 }
 
-/** Resolves to the bridge inside the Even app, or null in an ordinary browser. */
+/** The Even app (and its simulator) talk to the page through flutter_inappwebview. */
+const hostPresent = () =>
+  typeof (window as unknown as { flutter_inappwebview?: { callHandler?: unknown } }).flutter_inappwebview?.callHandler === 'function'
+
+/**
+ * Resolves to the bridge inside the Even app, or null in an ordinary browser.
+ *
+ * waitForEvenAppBridge() alone isn't enough: it also resolves in a plain
+ * browser, where every call (including storage) silently goes nowhere. So the
+ * bridge is only used once the Even app's WebView handler is actually there.
+ */
 export async function connectBridge(timeoutMs = 2500): Promise<EvenAppBridge | null> {
-  const timeout = new Promise<null>(r => setTimeout(() => r(null), timeoutMs))
+  const deadline = Date.now() + timeoutMs
+  while (!hostPresent() && Date.now() < deadline) await new Promise(r => setTimeout(r, 50))
+  if (!hostPresent()) return (bridge = null)
+  const timeout = new Promise<null>(r => setTimeout(() => r(null), Math.max(500, deadline - Date.now())))
   bridge = await Promise.race([waitForEvenAppBridge(), timeout])
   return bridge
 }

@@ -44,11 +44,24 @@ export function signInProblem(): string | null {
 const base64url = (bytes: Uint8Array) =>
   btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 
+// The sign-in round trip (to Spotify and back) reloads the page. The verifier
+// is kept in the page's own localStorage as well as the Even app's storage, so
+// it survives even if the bridge comes up slowly (or not at all) on the way back.
+const pageStore = {
+  get: (k: string) => { try { return localStorage.getItem(k) } catch { return null } },
+  set: (k: string, v: string) => { try { localStorage.setItem(k, v) } catch { /* private mode */ } },
+  remove: (k: string) => { try { localStorage.removeItem(k) } catch { /* ignore */ } },
+}
+
 export async function startSignIn(clientId: string): Promise<void> {
   const verifier = base64url(crypto.getRandomValues(new Uint8Array(48)))
   const challenge = base64url(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))))
-  await store.set(K.clientId, clientId.trim())
-  await store.set(K.verifier, verifier)
+  pageStore.set(K.clientId, clientId.trim())
+  pageStore.set(K.verifier, verifier)
+  try {
+    await store.set(K.clientId, clientId.trim())
+    await store.set(K.verifier, verifier)
+  } catch { /* pageStore has it */ }
   location.href = `${ACCOUNTS}/authorize?` + new URLSearchParams({
     response_type: 'code',
     client_id: clientId.trim(),
@@ -97,9 +110,14 @@ export async function finishSignIn(): Promise<string | null> {
   history.replaceState(null, '', redirectUri() + (params.has('demo') ? '?demo' : ''))
   if (error) return error === 'access_denied' ? 'Spotify sign-in was cancelled.' : `Spotify sign-in failed: ${error}`
 
-  const clientId = await store.get(K.clientId)
-  const verifier = await store.get(K.verifier)
-  if (!clientId || !verifier) return 'Sign-in timed out. Tap Connect again.'
+  const fromStore = async (k: string) => { try { return await store.get(k) } catch { return null } }
+  const clientId = pageStore.get(K.clientId) || (await fromStore(K.clientId))
+  const verifier = pageStore.get(K.verifier) || (await fromStore(K.verifier))
+  if (!clientId || !verifier) {
+    // Spotify sent the browser back somewhere other than where sign-in began
+    // (e.g. Safari instead of the Even app), so the secret half is missing.
+    return 'This sign-in was started in another app or browser. Tap Connect Spotify again here.'
+  }
   try {
     await tokenRequest({
       grant_type: 'authorization_code',
@@ -108,7 +126,9 @@ export async function finishSignIn(): Promise<string | null> {
       client_id: clientId,
       code_verifier: verifier,
     })
-    await store.remove(K.verifier)
+    await store.set(K.clientId, clientId)
+    pageStore.remove(K.verifier)
+    await store.remove(K.verifier).catch(() => {})
     return null
   } catch (e) {
     return `Spotify sign-in failed: ${(e as Error).message}`
