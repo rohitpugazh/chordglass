@@ -6,3 +6,5 @@ public/cn/
 data/
 .DS_Store
 __pycache__/
+# Downloaded by scripts/fetch-model.mjs (ChordMini, MIT)
+public/models/

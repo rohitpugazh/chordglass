@@ -230,7 +230,8 @@ export class App {
     }
     this.chartState = { status: 'loading' }
     this.render()
-    const found = await findChart(id)
+    const p = this.playback
+    const found = await findChart(id, this.demo ? undefined : { title: p?.title ?? '', artist: p?.mainArtist ?? '' })
     if (this.playback?.trackId !== id) return // track changed meanwhile
     if (found.status === 'found') {
       this.chartState = { status: 'ready', chart: found.chart, info: songInfo(found.chart, this.clock.durationMs, prefs.transpose) }
@@ -240,7 +241,7 @@ export class App {
     if (seen) {
       const cs = this.chartState
       seen.chart = cs.status === 'ready'
-        ? `${cs.chart.source} ${isTimed(cs.chart) ? 'timed' : 'untimed'}, ${cs.chart.events.length} chords, key ${cs.info.shapeKey}`
+        ? `${cs.chart.source}${found.status === 'found' && found.via ? ` (via other release ${found.via})` : ''} ${isTimed(cs.chart) ? 'timed' : 'untimed'}, ${cs.chart.events.length} chords, key ${cs.info.shapeKey}`
         : cs.status === 'error' ? `error: ${cs.message}` : cs.status
     }
     this.render()
@@ -257,7 +258,7 @@ export class App {
     const id = this.demoTrack || DEMO_TRACK_ID
     const duration = this.demoTrack ? 240_000 : DEMO_DURATION_MS
     this.playback = {
-      kind: 'track', trackId: id, title: this.demoTrack ? `Track ${id}` : DEMO_TITLE, artists: this.demoTrack ? '' : DEMO_ARTIST,
+      kind: 'track', trackId: id, title: this.demoTrack ? `Track ${id}` : DEMO_TITLE, artists: this.demoTrack ? '' : DEMO_ARTIST, mainArtist: '',
       album: '', durationMs: duration, isPlaying: true, progressMs: 0, sampledAt: performance.now(), rttMs: 0,
     }
     this.clock.set(id, 0, true, duration)

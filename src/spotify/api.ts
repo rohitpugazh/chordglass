@@ -17,6 +17,8 @@ export interface Playback {
   trackId: string
   title: string
   artists: string
+  /** First credited artist, for searching. */
+  mainArtist: string
   album: string
   durationMs: number
   isPlaying: boolean
@@ -84,10 +86,10 @@ export async function getPlayback(attempt = 0): Promise<Playback | null> {
     rttMs: t1 - t0,
   }
   if (!item) {
-    return { ...base, kind: data.currently_playing_type === 'ad' ? 'ad' : 'unknown', trackId: '', title: '', artists: '', album: '', durationMs: 0 }
+    return { ...base, kind: data.currently_playing_type === 'ad' ? 'ad' : 'unknown', trackId: '', title: '', artists: '', mainArtist: '', album: '', durationMs: 0 }
   }
   if (item.type === 'episode') {
-    return { ...base, kind: 'episode', trackId: item.id, title: item.name, artists: item.show?.name ?? '', album: '', durationMs: item.duration_ms ?? 0 }
+    return { ...base, kind: 'episode', trackId: item.id, title: item.name, artists: item.show?.name ?? '', mainArtist: item.show?.name ?? '', album: '', durationMs: item.duration_ms ?? 0 }
   }
   return {
     ...base,
@@ -95,7 +97,41 @@ export async function getPlayback(attempt = 0): Promise<Playback | null> {
     trackId: item.id,
     title: item.name ?? '',
     artists: (item.artists ?? []).map((a: { name: string }) => a.name).join(', '),
+    mainArtist: item.artists?.[0]?.name ?? '',
     album: item.album?.name ?? '',
     durationMs: item.duration_ms ?? 0,
   }
+}
+
+/**
+ * Spotify track IDs of other releases of a song (album vs single vs
+ * remaster vs compilation), via search. Search is still available to
+ * Development Mode apps, with at most 10 results.
+ */
+export async function findOtherReleases(title: string, artist: string, attempt = 0): Promise<string[]> {
+  if (!title || Date.now() < blockedUntil) return []
+  const token = await getAccessToken()
+  const q = `track:"${title.replace(/"/g, '')}" artist:"${artist.replace(/"/g, '')}"`
+  const res = await fetch(`${API}/search?${new URLSearchParams({ q, type: 'track', limit: '10' })}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (res.status === 401 && attempt === 0) {
+    invalidateAccessToken()
+    return findOtherReleases(title, artist, 1)
+  }
+  if (res.status === 429) {
+    blockedUntil = Date.now() + (Number(res.headers.get('Retry-After')) || 5) * 1000
+    return []
+  }
+  if (!res.ok) return []
+  const data = await res.json().catch(() => null)
+  return (data?.tracks?.items ?? []).map((t: { id: string }) => t.id).filter(Boolean)
+}
+
+/** "Toxicity - 2011 Remaster (feat. X)" -> "Toxicity": what chord sheets usually call a song. */
+export function baseTitle(title: string): string {
+  return title
+    .replace(/\s*[-–]\s*(\d{4}\s*)?(remaster(ed)?|live|mono|stereo|single|radio edit|edit|version|mix|acoustic|demo|bonus).*$/i, '')
+    .replace(/\s*[([](feat\.?|ft\.?|with|from|remaster|live|\d{4} remaster|deluxe|bonus)[^)\]]*[)\]]/gi, '')
+    .trim() || title
 }
