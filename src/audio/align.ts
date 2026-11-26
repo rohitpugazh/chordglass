@@ -27,6 +27,8 @@ export interface Alignment {
   timeline: TimedEvent[]
   /** 0..1: how much of what was heard recently the aligned chords explain. */
   fit: number
+  /** The same over the last ~3 s: drops where the band departs from the sheet. */
+  recentFit: number
   /** Share of the chart's chords visited so far. */
   coverage: number
   /** The aligned chord changes so far, for saving as a timed chart. */
@@ -151,32 +153,62 @@ export function align(states: AlignState[], frames: HeardFrame[], durationMs: nu
     else runs.push({ state: path[t], startMs, endMs })
   }
 
-  // Fit: over the last ~8 s, how much of the strongest heard chord the aligned chord accounts for.
-  let num = 0, den = 0
-  for (let t = Math.max(0, T - Math.round(8000 / frameMs)); t < T; t++) {
-    const f = frames[t].fam
-    let top = 0
-    for (let k = 0; k < FAMILIES; k++) if (k !== NO_CHORD && f[k] > top) top = f[k]
-    if (f[NO_CHORD] > 0.6) continue
-    let p = 0
-    for (const fam of states[path[t]].fams) p += f[fam]
-    num += Math.min(p, top)
-    den += top
+  // Fit: how much of the strongest heard chord the aligned chord accounts for,
+  // over the last ~8 s, and over the last ~3 s (skipping the newest, unsettled frames).
+  const fitOver = (fromMs: number, skip: number) => {
+    let num = 0, den = 0
+    for (let t = Math.max(0, T - Math.round(fromMs / frameMs)); t < T - skip; t++) {
+      const f = frames[t].fam
+      let top = 0
+      for (let k = 0; k < FAMILIES; k++) if (k !== NO_CHORD && f[k] > top) top = f[k]
+      if (f[NO_CHORD] > 0.6) continue
+      let p = 0
+      for (const fam of states[path[t]].fams) p += f[fam]
+      num += Math.min(p, top)
+      den += top
+    }
+    return den ? num / den : 0
   }
-  const fit = den ? num / den : 0
+  const fit = fitOver(8000, 0)
+  const recentFit = fitOver(3500, Math.round(500 / frameMs))
   const visited = new Set(runs.map(r => r.state))
 
-  return { timeline: predict(states, runs, durationMs, d * frameMs), fit, coverage: visited.size / K, runs, states }
+  return { timeline: predict(states, runs, durationMs, d * frameMs), fit, recentFit, coverage: visited.size / K, runs, states }
 }
 
-/** Heard runs, then the following chart chords with durations learned from what was heard. */
+/**
+ * Heard runs, then the following chart chords with durations learned from
+ * what was heard.
+ *
+ * A chord's length depends on where it sits in the pattern (in "Dm F C" the
+ * Dm may last two bars and the others one), so a chord is expected to last as
+ * long as the last time the same chord led into the same next chord; failing
+ * that, as long as the last time that chord was heard; failing that, a
+ * typical recent chord length.
+ */
 function predict(states: AlignState[], runs: Alignment['runs'], durationMs: number, defaultMs: number): TimedEvent[] {
   const done = runs.slice(0, -1).filter(r => r.endMs - r.startMs > 300)
-  const durOf = new Map<number, number>()
-  for (const r of done) durOf.set(r.state, r.endMs - r.startMs)
+  const lenByState = new Map<number, number>()
+  const lenByContext = new Map<string, number>()
+  const lenByChord = new Map<string, number>()
+  done.forEach((r, i) => {
+    const len = r.endMs - r.startMs
+    const chord = states[r.state].chord
+    const after = done[i + 1] ?? runs[runs.length - 1]
+    lenByState.set(r.state, len)
+    if (after && after !== r) lenByContext.set(`${chord}>${states[after.state].chord}`, len)
+    lenByChord.set(chord, len)
+  })
   const recent = done.slice(-8).map(r => r.endMs - r.startMs).sort((a, b) => a - b)
   const typical = recent.length >= 3 ? recent[recent.length >> 1] : defaultMs
-  const expected = (k: number) => durOf.get(k) ?? typical
+  const expected = (k: number) => {
+    const chord = states[k].chord
+    const next = states[k + 1]?.chord
+    return (next !== undefined ? lenByContext.get(`${chord}>${next}`) : undefined)
+      ?? lenByState.get(k)
+      ?? lenByChord.get(chord)
+      ?? typical
+  }
 
   const out: TimedEvent[] = []
   const push = (k: number, start: number, end: number, estimated: boolean) => {
@@ -187,8 +219,41 @@ function predict(states: AlignState[], runs: Alignment['runs'], durationMs: numb
   }
   for (const r of done) push(r.state, r.startMs, r.endMs, false)
   const cur = runs[runs.length - 1]
-  let t = Math.max(cur.startMs + expected(cur.state), cur.endMs + 150)
+
+  // Songs are loops: find the last time the band played the same chords
+  // leading into the current one, and expect what came next that time, with
+  // the same lengths. This follows the performance where it departs from the
+  // sheet (a chorus repeated where the sheet moves on).
+  const perf = [...done, cur]
+  const chordOf = (i: number) => states[perf[i].state].chord
+  const last = perf.length - 1
+  let match = -1
+  for (const ctx of [3, 2]) {
+    for (let j = last - 1; j >= ctx - 1 && match < 0; j--) {
+      let same = true
+      for (let c = 0; c < ctx && same; c++) same = chordOf(j - c) === chordOf(last - c)
+      // The earlier occurrence must have been followed by something we heard.
+      if (same && j + 1 < last) match = j
+    }
+    if (match >= 0) break
+  }
+
+  // If the chord has already been heard going on past its expected length,
+  // don't guess when it ends: hold it until the audio shows the change
+  // (the next analysis comes well within this hold).
+  const curLen = match >= 0 ? perf[match].endMs - perf[match].startMs : expected(cur.state)
+  const expectedEnd = cur.startMs + curLen
+  let t = expectedEnd > cur.endMs ? expectedEnd : cur.endMs + 2500
   push(cur.state, cur.startMs, t, false)
+
+  if (match >= 0) {
+    for (let j = match + 1; j < last && t < durationMs && out.length < done.length + 12; j++) {
+      const end = Math.min(durationMs, t + (perf[j].endMs - perf[j].startMs))
+      push(perf[j].state, t, end, true)
+      t = end
+    }
+    return out
+  }
   for (let k = cur.state + 1; k < states.length && t < durationMs; k++) {
     const end = Math.min(durationMs, t + expected(k))
     push(k, t, end, true)

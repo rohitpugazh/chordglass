@@ -319,6 +319,8 @@ export class App {
     if (cs.status === 'missing' || cs.status === 'error') return 'no chart for this song'
     const a = this.listening.alignment
     if (cs.status === 'ready' && a && a.fit < 0.3 && this.listening.framesHeard > 150) return "chart doesn't match the music"
+    // The band has departed from the sheet for the moment (a held chord, a different bridge): show what's heard until it locks back on.
+    if (cs.status === 'ready' && a && a.fit >= 0.5 && a.recentFit < 0.45 && this.listening.framesHeard > 80 && this.listening.heard()) return 'off the sheet here'
     return null
   }
 
