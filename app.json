@@ -1,0 +1,24 @@
+{
+  "package_id": "dev.chordglass.app",
+  "edition": "202601",
+  "name": "ChordGlass",
+  "version": "0.1.0",
+  "min_app_version": "2.2.10",
+  "min_sdk_version": "0.0.16",
+  "tagline": "Live guitar chords, key and tuning for what's playing on Spotify",
+  "description": "Shows the chords of the song playing on Spotify in time with the music, plus its key, tuning and capo. Swipe to fine-tune sync, tap along to time a chart yourself.",
+  "author": "ChordGlass",
+  "entrypoint": "index.html",
+  "supported_languages": ["en"],
+  "permissions": [
+    {
+      "name": "network",
+      "desc": "Asks Spotify what song is playing and how far in it is, and downloads chord charts for that song.",
+      "whitelist": [
+        "https://accounts.spotify.com",
+        "https://api.spotify.com",
+        "https://rohitpugazh.github.io"
+      ]
+    }
+  ]
+}

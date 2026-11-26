@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.ehpk
+# Built from the Chordonomicon dataset by scripts/build_chordonomicon_index.py
+public/cn/
+data/
+.DS_Store
+__pycache__/
