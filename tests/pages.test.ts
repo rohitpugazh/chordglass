@@ -14,7 +14,7 @@ describe('timed page', () => {
     // Bar 5 (9.6 s) is the first chord of Verse 1.
     const page = timedPage({ song: song(10_000), info, leadMs: 0, displayMs: 10_000, bigChord: true, flash: '' })
     expect(page.layout).toBe('timed-big')
-    expect(page.images[0].key).toBe('G|')
+    expect(page.images[0].key).toBe('G||')
     expect(text(page, 'side')).toContain('next  D')
     expect(text(page, 'side')).toContain('[Verse 1]')
     expect(text(page, 'foot')).toMatch(/^\[G\]  D  Em  C/)
@@ -32,7 +32,7 @@ describe('timed page', () => {
   it('transposes what it shows', () => {
     const up2 = songInfo(demoChart(), DEMO_DURATION_MS, 2)
     const page = timedPage({ song: song(10_000), info: up2, leadMs: 0, displayMs: 10_000, bigChord: true, flash: '' })
-    expect(page.images[0].key).toBe('A|')
+    expect(page.images[0].key).toBe('A||')
     expect(text(page, 'foot')).toContain('shapes A')
   })
 
@@ -52,5 +52,28 @@ describe('untimed page', () => {
     expect(body).toContain('E  D  A  C')
     expect(body).toContain('next [Chorus 1]  E G D A')
     expect(body).toContain('Key E')
+  })
+})
+
+describe('estimated timing for untimed charts', () => {
+  const chart = chordonomiconToChart('x', '<intro_1> E D A <verse_1> E D A C <chorus_1> E G D A')
+  const info = songInfo(chart, 110_000, 0)
+
+  it('spreads the chords over the song and says so', () => {
+    expect(info.estimated).toBe(true)
+    expect(info.timeline.length).toBe(11)
+    expect(info.timeline[0].start).toBe(2200)
+    expect(info.timeline[info.timeline.length - 1].end).toBeLessThanOrEqual(110_000 - 3300)
+  })
+
+  it('shows the big chord with an estimate marker', () => {
+    const page = timedPage({ song: { ...song(30_000), durationMs: 110_000 }, info, leadMs: 0, displayMs: 30_000, bigChord: true, flash: '' })
+    expect(page.layout).toBe('timed-big')
+    expect(page.images[0].key).toMatch(/\|est$/)
+    expect(text(page, 'foot')).toContain('~timing')
+  })
+
+  it('keeps real timing when the chart has it', () => {
+    expect(songInfo(demoChart(), DEMO_DURATION_MS, 0).estimated).toBe(false)
   })
 })

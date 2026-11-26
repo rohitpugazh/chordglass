@@ -332,7 +332,7 @@ export function mountPhoneUi(app: App, opts: { signInError: string | null; inEve
       else if (c.status === 'error') status = `Chord lookup failed: ${c.message}`
       else if (c.status === 'ready') {
         const src = c.chart.source === 'user' ? 'Your chart' : c.chart.source === 'demo' ? 'Demo chart' : 'From Chordonomicon'
-        status = `${src}, ${c.chart.events.length} chords, ${isTimed(c.chart) ? 'timed' : 'untimed'}. ${keyLine(c.info)}${setupLine(c.info) ? ' · ' + setupLine(c.info) : ''}`
+        status = `${src}, ${c.chart.events.length} chords, ${isTimed(c.chart) ? 'timed' : 'untimed, timing estimated (record timings on the glasses to fix)'}. ${keyLine(c.info)}${setupLine(c.info) ? ' · ' + setupLine(c.info) : ''}`
       }
     }
     if (status !== lastStatusKey) {

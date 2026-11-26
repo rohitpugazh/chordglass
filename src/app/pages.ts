@@ -55,6 +55,7 @@ export function messagePage(song: Song | null, lines: string[], menu: MenuItem[]
 function statusLine(song: Song, info: SongInfo, flash: string): string {
   if (flash) return flash
   const bits = [keyLine(info), setupLine(info), `${mmss(song.positionMs)}/${mmss(song.durationMs)}`]
+  if (info.estimated) bits.push('~timing')
   if (!song.playing) bits.push('paused')
   return clipPx(bits.filter(Boolean).join(' · '), W - 16)
 }
@@ -123,8 +124,8 @@ export function timedPage(s: TimedState): Page {
     const chordSymbol = cur ? show(cur.chord) : next ? show(next.chord) : ''
     const image: ImageBox = {
       id: 3, name: 'chord', x: 0, y: 38, w: CHORD_IMG_W, h: CHORD_IMG_H,
-      key: `${chordSymbol}|${cur ? '' : 'dim'}`,
-      render: () => renderChordPng(chordSymbol, '', !cur),
+      key: `${chordSymbol}|${cur ? '' : 'dim'}|${s.info.estimated ? 'est' : ''}`,
+      render: () => renderChordPng(chordSymbol, s.info.estimated ? '~ estimated timing' : '', !cur),
     }
     const side = [
       next ? clipPx(`next  ${nextLabel}`, 270) : 'end',
@@ -145,7 +146,7 @@ export function timedPage(s: TimedState): Page {
     }
   }
 
-  const nowLine = cur ? `NOW  ${show(cur.chord)}` : 'NOW  -'
+  const nowLine = (s.info.estimated ? '~' : '') + (cur ? `NOW  ${show(cur.chord)}` : 'NOW  -')
   const pad = Math.max(1, Math.round((260 - approxPx(nowLine)) / 5.3))
   const lines = [
     nowLine + ' '.repeat(pad) + (next ? `next ${nextLabel}` : 'end'),
@@ -230,7 +231,7 @@ export function infoPage(s: InfoState): Page {
   if (s.chart) {
     const timed = s.chart.events.some(e => e.t !== null)
     const src = s.chart.source === 'user' ? 'your chart' : s.chart.source === 'demo' ? 'demo' : 'Chordonomicon'
-    lines.push(`Chords: ${src}, ${s.chart.events.length} changes, ${timed ? 'timed' : 'untimed'}`)
+    lines.push(`Chords: ${src}, ${s.chart.events.length} changes, ${timed ? 'timed' : 'no timing (estimated; hold > record to fix)'}`)
   }
   lines.push(`Sync: chords ${s.leadMs} ms early · Spotify off by ${Math.round(s.syncErrorMs)} ms (${Math.round(s.rttMs)} ms trip)`)
   lines.push('tap: back')

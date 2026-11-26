@@ -25,6 +25,8 @@ export interface SongInfo {
   transpose: number
   preferFlats: boolean
   timeline: TimedEvent[]
+  /** True when the chart has no times and the timeline is a guess spread over the song. */
+  estimated: boolean
   /** Chord symbol as you should play it (transposed, spelled for the key). */
   display: (symbol: string) => string
 }
@@ -43,8 +45,31 @@ export function mergeRepeats(timeline: TimedEvent[]): TimedEvent[] {
   return out
 }
 
+/**
+ * A guess for charts without times: chords spread evenly over the track,
+ * leaving a little room for a count-in and a fade-out. Often a chord or two
+ * off, which is why it's marked as estimated and swipes move it a chord at a time.
+ */
+export function estimateTimeline(chart: Chart, durationMs: number): TimedEvent[] {
+  const n = chart.events.length
+  if (!n || durationMs <= 0) return []
+  const start = Math.min(3000, durationMs * 0.02)
+  const end = durationMs - Math.min(5000, durationMs * 0.03)
+  const step = (end - start) / n
+  return chart.events.map((e, index) => ({
+    index,
+    start: Math.round(start + index * step),
+    end: Math.round(start + (index + 1) * step),
+    chord: e.chord,
+    section: e.section ?? '',
+    estimated: true,
+  }))
+}
+
 export function songInfo(chart: Chart, durationMs: number, transpose: number): SongInfo {
-  const timeline = mergeRepeats(buildTimeline(chart, durationMs))
+  const given = buildTimeline(chart, durationMs)
+  const estimated = !given.length && durationMs > 0 && chart.events.length > 0
+  const timeline = mergeRepeats(estimated ? estimateTimeline(chart, durationMs) : given)
   const parsed: WeightedChord[] = []
   const source = timeline.length
     ? timeline.map(e => ({ chord: e.chord, section: e.section, weight: Math.max(1, e.end - e.start) }))
@@ -55,9 +80,9 @@ export function songInfo(chart: Chart, durationMs: number, transpose: number): S
     if (c) parsed.push({ chord: c, weight: e.weight, phraseStart })
   })
 
-  const given = chart.key ? parseKey(chart.key) : null
-  const inferred = given ? null : inferKey(parsed)
-  const written = given ?? (inferred ? { tonic: inferred.tonic, mode: inferred.mode, name: inferred.name } : null)
+  const givenKey = chart.key ? parseKey(chart.key) : null
+  const inferred = givenKey ? null : inferKey(parsed)
+  const written = givenKey ?? (inferred ? { tonic: inferred.tonic, mode: inferred.mode, name: inferred.name } : null)
 
   const tuning = parseTuning(chart.tuning) ?? STANDARD_TUNING
   const capo = chart.capo ?? 0
@@ -68,8 +93,8 @@ export function songInfo(chart: Chart, durationMs: number, transpose: number): S
 
   return {
     writtenKey: written,
-    keySource: given ? 'chart' : inferred ? 'chords' : null,
-    keyConfidence: given ? 1 : inferred?.confidence ?? 0,
+    keySource: givenKey ? 'chart' : inferred ? 'chords' : null,
+    keyConfidence: givenKey ? 1 : inferred?.confidence ?? 0,
     shapeKey: name(transpose),
     soundingKey: name(capo + offset),
     relative: written ? relativeKey(written).name : '',
@@ -79,6 +104,7 @@ export function songInfo(chart: Chart, durationMs: number, transpose: number): S
     transpose,
     preferFlats,
     timeline,
+    estimated,
     display: (symbol: string) => (transpose ? transposeSymbol(symbol, transpose, preferFlats) : symbol),
   }
 }

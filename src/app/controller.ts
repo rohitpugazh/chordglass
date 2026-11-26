@@ -68,6 +68,8 @@ export class App {
   private chartState: ChartState = { status: 'none' }
   private view: View = 'main'
   private sectionIndex = 0
+  /** For estimated timelines: how far the user has nudged it, in ms (a chord per swipe). */
+  private estimateShiftMs = 0
   private problem = ''
   private signedIn = true
   private flash = ''
@@ -204,6 +206,7 @@ export class App {
       this.view = this.view === 'info' ? 'info' : 'main'
       this.record = null
       this.sectionIndex = 0
+      this.estimateShiftMs = 0
       void this.reloadChart(false)
     } else if (result === 'jump') {
       debug('seek or resume')
@@ -286,7 +289,9 @@ export class App {
   }
 
   private displayMs(): number {
-    return this.clock.position() + prefs.leadMs
+    const cs = this.chartState
+    const shift = cs.status === 'ready' && cs.info.estimated ? this.estimateShiftMs : 0
+    return this.clock.position() + prefs.leadMs + shift
   }
 
   private bigChord(): boolean {
@@ -350,7 +355,7 @@ export class App {
         timedCount: this.record.stamps.length, bigChord: this.bigChord(), flash,
       })
     }
-    if (isTimed(cs.chart)) {
+    if (isTimed(cs.chart) || cs.info.estimated) {
       return timedPage({ song, info: cs.info, leadMs: prefs.leadMs, displayMs: this.displayMs(), bigChord: this.bigChord(), flash })
     }
     return untimedPage({ song, info: cs.info, chart: cs.chart, sectionIndex: this.sectionIndex, flash })
@@ -466,6 +471,16 @@ export class App {
     const cs = this.chartState
     if (this.view === 'record') return dir === 'up' ? this.undoStamp() : this.skipChord()
     if (this.view !== 'main' || cs.status !== 'ready') return
+    if (cs.info.estimated) {
+      // The guess is off by whole chords, so move it a chord at a time.
+      const tl = cs.info.timeline
+      const now = this.displayMs()
+      const i = tl.findIndex(e => e.start <= now && now < e.end)
+      const step = i >= 0 ? tl[i].end - tl[i].start : (this.clock.durationMs || 1) / Math.max(1, tl.length)
+      this.estimateShiftMs += dir === 'up' ? step : -step
+      this.showFlash(dir === 'up' ? 'Jumped ahead one chord' : 'Went back one chord')
+      return
+    }
     if (isTimed(cs.chart)) {
       const leadMs = Math.max(-2000, Math.min(3000, prefs.leadMs + (dir === 'up' ? LEAD_STEP_MS : -LEAD_STEP_MS)))
       void savePrefs({ leadMs })
