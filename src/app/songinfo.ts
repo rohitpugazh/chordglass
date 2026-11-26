@@ -27,6 +27,10 @@ export interface SongInfo {
   timeline: TimedEvent[]
   /** True when the chart has no times and the timeline is a guess spread over the song. */
   estimated: boolean
+  /** Where the timeline comes from: the chart's own times, an even spread, the music (listening), or nothing (heard chords only). */
+  mode: 'timed' | 'estimated' | 'aligned' | 'heard'
+  /** Listening found the recording this many semitones from the chart (tuned down, capo...). */
+  recordingShift?: number
   /** Chord symbol as you should play it (transposed, spelled for the key). */
   display: (symbol: string) => string
 }
@@ -105,6 +109,7 @@ export function songInfo(chart: Chart, durationMs: number, transpose: number): S
     preferFlats,
     timeline,
     estimated,
+    mode: estimated ? 'estimated' : 'timed',
     display: (symbol: string) => (transpose ? transposeSymbol(symbol, transpose, preferFlats) : symbol),
   }
 }
@@ -121,6 +126,10 @@ export function keyLine(info: SongInfo): string {
 /** "Eb std · Capo 2" etc. Omits standard tuning when the chart didn't say. */
 export function setupLine(info: SongInfo): string {
   const parts: string[] = []
+  const s = info.recordingShift ?? 0
+  // The record sounds lower/higher than the chart: tune down/up by that much (or capo when higher).
+  if (s < 0) parts.push(s === -1 ? 'Tune 1/2 step down' : `Tune ${-s / 2} steps down`)
+  if (s > 0) parts.push(`Capo ${s} (record is higher)`)
   if (info.tuningGiven || info.tuning.uniformOffset !== 0) parts.push(tuningShort(info.tuning))
   if (info.capo) parts.push(`Capo ${info.capo}`)
   if (info.transpose) parts.push(`Transposed ${info.transpose > 0 ? '+' : ''}${info.transpose}`)

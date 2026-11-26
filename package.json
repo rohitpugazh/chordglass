@@ -12,10 +12,13 @@
     "sim": "evenhub-simulator http://127.0.0.1:5173/?demo",
     "qr": "evenhub qr --http --port 5173",
     "pack": "npm run build && node scripts/prepack.mjs && evenhub pack app.json dist -o chordglass.ehpk",
-    "index:chordonomicon": "python -I scripts/build_chordonomicon_index.py"
+    "index:chordonomicon": "python -I scripts/build_chordonomicon_index.py",
+    "fetch-model": "node scripts/fetch-model.mjs",
+    "loopback": "python -I scripts/loopback.py serve"
   },
   "dependencies": {
-    "@evenrealities/even_hub_sdk": "^0.0.16"
+    "@evenrealities/even_hub_sdk": "^0.0.16",
+    "onnxruntime-web": "^1.31.1"
   },
   "devDependencies": {
     "@evenrealities/evenhub-cli": "^0.2.0",

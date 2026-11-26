@@ -15,6 +15,7 @@ export const H = 288
 
 export const MENU = {
   record: 1,
+  listen: 8,
   transposeUp: 2,
   transposeDown: 3,
   resetSync: 4,
@@ -55,12 +56,14 @@ export function messagePage(song: Song | null, lines: string[], menu: MenuItem[]
 function statusLine(song: Song, info: SongInfo, flash: string): string {
   if (flash) return flash
   const bits = [keyLine(info), setupLine(info), `${mmss(song.positionMs)}/${mmss(song.durationMs)}`]
-  if (info.estimated) bits.push('~timing')
+  if (info.mode === 'estimated') bits.push('~timing')
+  if (info.mode === 'aligned') bits.push('listening')
   if (!song.playing) bits.push('paused')
   return clipPx(bits.filter(Boolean).join(' · '), W - 16)
 }
 
-const timedMenu = (bigChord: boolean): MenuItem[] => [
+const timedMenu = (bigChord: boolean, listening: boolean): MenuItem[] => [
+  { id: MENU.listen, label: listening ? 'Listening: turn off' : 'Listen to the music' },
   { id: MENU.record, label: 'Record chord timings' },
   { id: MENU.transposeUp, label: 'Transpose up' },
   { id: MENU.transposeDown, label: 'Transpose down' },
@@ -72,6 +75,7 @@ const timedMenu = (bigChord: boolean): MenuItem[] => [
 
 export interface TimedState {
   song: Song
+  listening?: boolean
   info: SongInfo
   leadMs: number
   /** Position used to pick the chord: Spotify position + lead. */
@@ -124,8 +128,8 @@ export function timedPage(s: TimedState): Page {
     const chordSymbol = cur ? show(cur.chord) : next ? show(next.chord) : ''
     const image: ImageBox = {
       id: 3, name: 'chord', x: 0, y: 38, w: CHORD_IMG_W, h: CHORD_IMG_H,
-      key: `${chordSymbol}|${cur ? '' : 'dim'}|${s.info.estimated ? 'est' : ''}`,
-      render: () => renderChordPng(chordSymbol, s.info.estimated ? '~ estimated timing' : '', !cur),
+      key: `${chordSymbol}|${cur ? '' : 'dim'}|${s.info.mode === 'estimated' ? 'est' : s.info.mode === 'aligned' ? 'listen' : ''}`,
+      render: () => renderChordPng(chordSymbol, s.info.mode === 'estimated' ? '~ estimated timing' : s.info.mode === 'aligned' ? '♪ in sync by listening' : '', !cur),
     }
     const side = [
       next ? clipPx(`next  ${nextLabel}`, 270) : 'end',
@@ -142,7 +146,7 @@ export function timedPage(s: TimedState): Page {
         { id: 5, name: 'foot', x: 0, y: 190, w: W, h: H - 190, content: `${sectionLine}\n${status}` },
       ],
       images: [image],
-      menu: timedMenu(true),
+      menu: timedMenu(true, !!s.listening),
     }
   }
 
@@ -159,7 +163,42 @@ export function timedPage(s: TimedState): Page {
     layout: 'timed-text',
     texts: [evt(), header(headerText(s.song)), body(lines.join('\n'))],
     images: [],
-    menu: timedMenu(false),
+    menu: timedMenu(false, !!s.listening),
+  }
+}
+
+export interface HeardState {
+  song: Song
+  /** The chord heard most recently, or null while nothing clear is heard. */
+  heard: { label: string; ageMs: number } | null
+  reason: string
+  bigChord: boolean
+  flash: string
+}
+
+/** No usable chart: show what the listener hears (a second or two behind the music). */
+export function heardPage(s: HeardState): Page {
+  const label = s.heard?.label ?? ''
+  const status = s.flash || clipPx(`${s.reason} · ${mmss(s.song.positionMs)}/${mmss(s.song.durationMs)}`, W - 16)
+  const menu: MenuItem[] = [{ id: MENU.listen, label: 'Listening: turn off' }, { id: MENU.reload, label: 'Reload chords' }]
+  if (s.bigChord) {
+    return {
+      layout: 'heard-big',
+      texts: [
+        evt(),
+        header(headerText(s.song)),
+        { id: 4, name: 'side', x: 300, y: 38, w: W - 300, h: CHORD_IMG_H, content: label ? 'heard just now\nno chart to look ahead' : 'listening...' },
+        { id: 5, name: 'foot', x: 0, y: 190, w: W, h: H - 190, content: status },
+      ],
+      images: [{ id: 3, name: 'chord', x: 0, y: 38, w: CHORD_IMG_W, h: CHORD_IMG_H, key: `heard|${label}`, render: () => renderChordPng(label || '...', '♪ heard', !label) }],
+      menu,
+    }
+  }
+  return {
+    layout: 'heard-text',
+    texts: [evt(), header(headerText(s.song)), body([label ? `HEARD  ${label}` : 'listening...', 'no chart to look ahead', status].join('\n'))],
+    images: [],
+    menu,
   }
 }
 

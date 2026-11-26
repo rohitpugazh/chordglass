@@ -9,7 +9,9 @@
   "description": "Shows the chords of the song playing on Spotify in time with the music, plus its key, tuning and capo. Swipe to fine-tune sync, tap along to time a chart yourself.",
   "author": "ChordGlass",
   "entrypoint": "index.html",
-  "supported_languages": ["en"],
+  "supported_languages": [
+    "en"
+  ],
   "permissions": [
     {
       "name": "network",
@@ -19,6 +21,14 @@
         "https://api.spotify.com",
         "https://rohitpugazh.github.io"
       ]
+    },
+    {
+      "name": "g2-microphone",
+      "desc": "Listens to the music playing around you to line the chords up with it. Audio is analysed on your phone and never sent anywhere."
+    },
+    {
+      "name": "phone-microphone",
+      "desc": "Optionally listens through the phone microphone instead of the glasses to line the chords up with the music."
     }
   ]
 }

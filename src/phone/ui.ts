@@ -102,6 +102,17 @@ Em C G D x2     (untimed chords are spread between timed ones)</pre>
   </section>
 
   <section class="card">
+    <h2>Listen to the music</h2>
+    <p class="muted">Lines the chords up with the song by listening, so they move with the music without tapping along. Uses the glasses microphone and a chord-recognition model that runs on your phone (about 32 MB, downloaded once). Audio never leaves the phone.</p>
+    <select id="listen">
+      <option value="off">Off</option>
+      <option value="glasses">Glasses microphone</option>
+      <option value="phone">Phone microphone</option>
+    </select>
+    <p class="muted" id="listen-status"></p>
+  </section>
+
+  <section class="card">
     <h2>Settings</h2>
     <label>Sync: show chords <b id="lead-val"></b> early
       <input type="range" id="lead" min="-1000" max="2000" step="50" />
@@ -244,6 +255,26 @@ export function mountPhoneUi(app: App, opts: { signInError: string | null; inEve
   const url = $<HTMLInputElement>('#index-url')
   url.value = prefs.chordIndexUrl
   url.onchange = () => void savePrefs({ chordIndexUrl: url.value.trim() || DEFAULT_PREFS.chordIndexUrl })
+  const listen = $<HTMLSelectElement>('#listen')
+  listen.value = prefs.listen
+  listen.onchange = () => void savePrefs({ listen: listen.value as 'off' | 'glasses' | 'phone' })
+  const listenStatus = () => {
+    const l = app.listening
+    if (l.state === 'off') return 'Not listening.'
+    if (l.state !== 'on') return l.message
+    const a = l.alignment
+    const heard = l.heard()
+    const bits = [
+      l.message,
+      `${l.framesHeard} frames heard`,
+      `analysis ${Math.round(l.analysisMs)} ms`,
+      heard ? `hearing ${heard.label}` : 'no chord heard yet',
+    ]
+    if (a) bits.push(`chart fit ${Math.round(a.fit * 100)}%`)
+    if (l.lastAudioAt && Date.now() - l.lastAudioAt > 3000) bits.push('NO AUDIO for ' + Math.round((Date.now() - l.lastAudioAt) / 1000) + ' s')
+    return bits.join(' · ')
+  }
+
   const demo = $<HTMLInputElement>('#demo')
   demo.onchange = () => app.setDemo(demo.checked)
 
@@ -286,6 +317,7 @@ export function mountPhoneUi(app: App, opts: { signInError: string | null; inEve
       `Spotify checks: ${d.polls.length} (${jumps} jumps: track change, seek or pause) · errors ${d.pollErrors}${d.lastError ? ' (' + d.lastError + ')' : ''}`,
       `Clock drift at each check (last ${abs.length} while playing): median ${median} ms, max ${abs[abs.length - 1] ?? 0} ms`,
       `Request round trip: ${avgRtt} ms average · sync lead ${prefs.leadMs} ms`,
+      `Listening: ${listenStatus()}`,
       '',
       'Tracks (newest first):',
       ...[...d.tracks].reverse().slice(0, 30).map(t =>
@@ -321,6 +353,9 @@ export function mountPhoneUi(app: App, opts: { signInError: string | null; inEve
     showLead()
     tr.value = String(prefs.transpose)
 
+    if (document.activeElement !== listen) listen.value = prefs.listen
+    const ls = listenStatus()
+    if ($('#listen-status').textContent !== ls) $('#listen-status').textContent = ls
     const now = s.track ? `${s.track.title} - ${s.track.artists}` : s.problem || 'Nothing playing.'
     if ($('#now').textContent !== now) $('#now').textContent = now
 

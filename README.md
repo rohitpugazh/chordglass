@@ -30,6 +30,7 @@ Honest limits:
 
 ```bash
 npm install
+npm run fetch-model             # ChordMini chord model into public/models (for listening)
 npm run dev                     # http://127.0.0.1:5173/?demo  (browser preview of the glasses)
 npm run sim                     # official Even Hub simulator on the demo song
 ```
@@ -74,6 +75,19 @@ The app is live at <https://rohitpugazh.github.io/chordglass/>. Every push to `m
 
 1. `app.json` already whitelists `https://rohitpugazh.github.io`, and `.env.production` points production builds at the hosted chord index.
 2. Run `npm run pack` and upload `chordglass.ehpk` at hub.evenrealities.com. In the Even app, go to **Even Hub → Me → Apps → Private builds**. Sign in with a sign-in key.
+
+## Listen to the music (auto-timing)
+
+On the phone page under **Listen to the music**, choose **Glasses microphone**. You can also hold on the glasses and choose **Listen to the music**.
+
+The app runs a chord-recognition model on your phone. That's ChordMini (ChordNet 2E1D, MIT), downloaded once: 17 MB of model plus a 15 MB runtime. The model listens to what the glasses mic hears, and the app uses that in two ways:
+
+- **With a chart (Chordonomicon or yours, untimed):** the chart is lined up with the music. The app copes with sections the chord sheet only wrote once and with listening starting mid-song. It also notices when the recording is in a different key from the chart, for example a band tuned a half step down. The big chord is then marked "♪ in sync by listening" and the next chord arrives on time. When a song finishes after a good alignment, its timing is saved as your chart for that track.
+- **Without a chart, or with a chart that doesn't match the music:** it shows the chord it hears, about a second behind the music.
+
+Audio is analysed on the phone and never sent anywhere. The mic has to hear the music, so this won't work with headphones.
+
+For development, `npm run loopback` streams whatever this computer plays as 16 kHz PCM, the glasses mic's format. Then open `http://127.0.0.1:5173/?audio=http://127.0.0.1:8765/pcm`.
 
 ## Controls
 
@@ -141,12 +155,12 @@ These are the things the simulator can't tell you:
 
 ## Next steps
 
-1. **Auto-timing from audio.** Use the glasses mic (16 kHz PCM) to align an untimed Chordonomicon chart to the music, so charts time themselves without record mode. BoneGlimpse (ChordMini in the WebView) is prior art for this on G2.
-2. **Tuning and capo metadata** from tab sources, or from your own Guitar Pro files via alphaTab.
-3. **Tabs.** The glasses font is proportional, so tab lines would be drawn as images.
+1. **Tuning and capo metadata** from tab sources, or from your own Guitar Pro files via alphaTab.
+2. **Tabs.** The glasses font is proportional, so tab lines would be drawn as images.
 
 ## Credits
 
+- Chord recognition: **ChordMini** ([ptnghia-j/ChordMini](https://github.com/ptnghia-j/ChordMini), MIT), using the ONNX export and CQT plan from [musetric/chordmini-onnx](https://huggingface.co/musetric/chordmini-onnx) (MIT). The CPU CQT follows musetric's `packages/cqt` (MIT). The model runs on [onnxruntime-web](https://github.com/microsoft/onnxruntime) (MIT).
 - Chord progressions: **Chordonomicon** (Kantarelis et al., 2024), [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/). Non-commercial use only, with attribution. The derived `cn/` shards keep that license.
 - G2 platform notes: [nickustinov/even-g2-notes](https://github.com/nickustinov/even-g2-notes).
 - Patterns learned from open G2 plugins: now-playing (PKCE in the Even WebView, sign-in keys), Riff, lyrics-glow, DisplayPlus Music and BoneGlimpse.

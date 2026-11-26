@@ -10,13 +10,16 @@ async function boot() {
   const demo = params.has('demo')
   // ?demo=<Spotify track ID> shows that track's chords on the demo clock (handy without Spotify).
   const demoTrack = /^[0-9A-Za-z]{22}$/.test(params.get('demo') ?? '') ? params.get('demo')! : undefined
+  // ?audio=http://127.0.0.1:8765/pcm uses this computer's audio (scripts/loopback.py serve) as the mic.
+  const audio = params.get('audio') ?? ''
+  const devAudioUrl = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//.test(audio) ? audio : undefined
   // Connect first: storage lives behind the bridge inside the Even app.
   const bridge = await connectBridge()
   await loadPrefs()
   const signInError = await finishSignIn()
   const app = new App()
   mountPhoneUi(app, { signInError, inEvenApp: !!bridge })
-  await app.start({ demo, demoTrack })
+  await app.start({ demo, demoTrack, devAudioUrl })
 }
 
 void boot().catch(err => {

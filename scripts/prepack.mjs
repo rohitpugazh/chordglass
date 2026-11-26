@@ -11,4 +11,5 @@ if (placeholder) {
   process.exit(1)
 }
 rmSync('dist/cn', { recursive: true, force: true })
-console.log('dist/cn removed from the package; chords will load from the chord index URL.')
+rmSync('dist/models', { recursive: true, force: true })
+console.log('dist/cn and dist/models removed from the package; they load from the hosted copy instead.')

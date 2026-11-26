@@ -1,16 +1,17 @@
 // The app's state machine: follows Spotify, loads chords for each track,
 // decides what the glasses show, and handles gestures and the hold menu.
 
-import { EventSourceType, OsEventTypeList as Ev, type EvenHubEvent } from '@evenrealities/even_hub_sdk'
+import { AudioInputSource, EventSourceType, OsEventTypeList as Ev, type EvenHubEvent } from '@evenrealities/even_hub_sdk'
 import { getBridge, serial } from '../bridge'
 import { isTimed, sections, type Chart } from '../chart/chart'
 import { Screen, type Page } from '../glasses/screen'
 import { NotSignedIn } from '../spotify/auth'
 import { getPlayback, rateLimitedForMs, SpotifyError, type Playback } from '../spotify/api'
 import { PlaybackClock } from '../spotify/clock'
-import { findChart, saveUserChart } from './charts'
+import { findChart, hasUserChart, saveUserChart } from './charts'
+import { Listening, startDevAudioStream } from './listening'
 import { DEMO_ARTIST, DEMO_DURATION_MS, DEMO_TITLE, DEMO_TRACK_ID, demoChart } from './demo'
-import { infoPage, MENU, messagePage, recordPage, timedPage, untimedPage, type Song } from './pages'
+import { heardPage, infoPage, MENU, messagePage, recordPage, timedPage, untimedPage, type Song } from './pages'
 import { onPrefsChange, prefs, savePrefs } from './prefs'
 import { songInfo, type SongInfo } from './songinfo'
 
@@ -63,6 +64,10 @@ export class App {
   /** What the app saw, for the phone page's diagnostics panel. */
   readonly diag = { polls: [] as PollSample[], tracks: [] as TrackSeen[], pollErrors: 0, lastError: '' }
   readonly screen = new Screen()
+  readonly listening = new Listening(() => this.render())
+  /** Dev aid: ?audio=<url> streams this computer's audio (scripts/loopback.py) in place of a mic. */
+  private devAudioUrl = ''
+  private stopDevAudio: (() => void) | null = null
   readonly clock = new PlaybackClock()
   private playback: Playback | null = null
   private chartState: ChartState = { status: 'none' }
@@ -88,13 +93,16 @@ export class App {
 
   // ---------- lifecycle ----------
 
-  async start(opts: { demo: boolean; demoTrack?: string }) {
+  async start(opts: { demo: boolean; demoTrack?: string; devAudioUrl?: string }) {
     this.demo = opts.demo
     this.demoTrack = opts.demoTrack ?? ''
+    this.devAudioUrl = opts.devAudioUrl ?? ''
     onPrefsChange(changed => {
       if ('transpose' in changed || 'chordIndexUrl' in changed) void this.reloadChart(true)
+      if ('listen' in changed) void (prefs.listen === 'off' && !this.devAudioUrl ? this.stopListening() : this.startListening())
       this.render()
     })
+    if (prefs.listen !== 'off' || this.devAudioUrl) void this.startListening()
     const bridge = getBridge()
     if (bridge) await serial(async b => { b.onEvenHubEvent(e => this.onEvent(e)) })
     if (this.demo) this.startDemo()
@@ -207,9 +215,12 @@ export class App {
       this.record = null
       this.sectionIndex = 0
       this.estimateShiftMs = 0
+      void this.saveListenedTiming()
+      this.listening.trackChanged()
       void this.reloadChart(false)
     } else if (result === 'jump') {
       debug('seek or resume')
+      this.listening.clockJumped()
     }
   }
 
@@ -237,6 +248,9 @@ export class App {
       this.chartState = { status: 'ready', chart: found.chart, info: songInfo(found.chart, this.clock.durationMs, prefs.transpose) }
     } else if (found.status === 'missing') this.chartState = { status: 'missing' }
     else this.chartState = { status: 'error', message: found.message }
+    const ready = this.chartState
+    // Listening lines up charts that have no times of their own.
+    this.listening.setChart(ready.status === 'ready' && !isTimed(ready.chart) ? ready.chart : null, this.clock.durationMs, `${id}|${ready.status}`)
     const seen = [...this.diag.tracks].reverse().find(t => t.id === id)
     if (seen) {
       const cs = this.chartState
@@ -289,9 +303,28 @@ export class App {
     this.render()
   }
 
+  /** The chart's timeline as heard, when listening has lined it up well enough to trust. */
+  private alignedInfo(): SongInfo | null {
+    const cs = this.chartState
+    const a = this.listening.alignment
+    if (cs.status !== 'ready' || isTimed(cs.chart) || !a || a.fit < 0.5 || this.listening.framesHeard < 50) return null
+    const shift = this.listening.shift
+    return { ...cs.info, timeline: a.timeline, estimated: false, mode: 'aligned', recordingShift: shift }
+  }
+
+  /** Listening is on but the chart is missing or doesn't match the music: show what's heard. */
+  private heardReason(): string | null {
+    if (this.listening.state !== 'on') return null
+    const cs = this.chartState
+    if (cs.status === 'missing' || cs.status === 'error') return 'no chart for this song'
+    const a = this.listening.alignment
+    if (cs.status === 'ready' && a && a.fit < 0.3 && this.listening.framesHeard > 150) return "chart doesn't match the music"
+    return null
+  }
+
   private displayMs(): number {
     const cs = this.chartState
-    const shift = cs.status === 'ready' && cs.info.estimated ? this.estimateShiftMs : 0
+    const shift = cs.status === 'ready' && cs.info.estimated && !this.alignedInfo() ? this.estimateShiftMs : 0
     return this.clock.position() + prefs.leadMs + shift
   }
 
@@ -335,6 +368,14 @@ export class App {
       })
     }
     if (cs.status === 'loading' || cs.status === 'none') return messagePage(song, ['Looking up chords...'])
+    const heardReason = this.view === 'main' ? this.heardReason() : null
+    if (heardReason) {
+      const h = this.listening.heard()
+      return heardPage({
+        song, reason: heardReason, bigChord: this.bigChord(), flash,
+        heard: h ? { label: h.label, ageMs: this.clock.position() - h.songMs } : null,
+      })
+    }
     if (cs.status === 'missing') {
       return messagePage(song, [
         'No chords found for this track.',
@@ -357,7 +398,10 @@ export class App {
       })
     }
     if (isTimed(cs.chart) || cs.info.estimated) {
-      return timedPage({ song, info: cs.info, leadMs: prefs.leadMs, displayMs: this.displayMs(), bigChord: this.bigChord(), flash })
+      const info = this.alignedInfo() ?? cs.info
+      const listening = this.listening.active
+      const listenFlash = !flash && this.listening.state === 'on' && info.mode === 'estimated' ? 'listening to line the chords up...' : ''
+      return timedPage({ song, info, leadMs: prefs.leadMs, displayMs: this.displayMs(), bigChord: this.bigChord(), flash: flash || listenFlash, listening })
     }
     return untimedPage({ song, info: cs.info, chart: cs.chart, sectionIndex: this.sectionIndex, flash })
   }
@@ -391,7 +435,12 @@ export class App {
   // ---------- input ----------
 
   private onEvent(e: EvenHubEvent) {
-    if (e.audioEvent) return
+    if (e.audioEvent) {
+      const raw = e.audioEvent.audioPcm as unknown
+      const bytes = raw instanceof Uint8Array ? raw : Array.isArray(raw) ? Uint8Array.from(raw as number[]) : null
+      if (bytes) this.listening.audio(bytes, this.clock.position() - prefs.audioLatencyMs, this.clock.playing)
+      return
+    }
     if (e.menuItemClickEvent) {
       if (typeof e.menuItemClickEvent.itemID === 'number') void this.onMenu(e.menuItemClickEvent.itemID)
       return
@@ -406,6 +455,8 @@ export class App {
       case Ev.FOREGROUND_ENTER_EVENT:
         this.foreground = true
         this.screen.invalidate()
+        // The mic stops if the WebView was suspended; ask for it again.
+        if (this.listening.active && !this.devAudioUrl) void this.armMic()
         if (!this.demo) void this.poll()
         else this.render()
         return
@@ -472,7 +523,7 @@ export class App {
     const cs = this.chartState
     if (this.view === 'record') return dir === 'up' ? this.undoStamp() : this.skipChord()
     if (this.view !== 'main' || cs.status !== 'ready') return
-    if (cs.info.estimated) {
+    if (cs.info.estimated && !this.alignedInfo()) {
       // The guess is off by whole chords, so move it a chord at a time.
       const tl = cs.info.timeline
       const now = this.displayMs()
@@ -496,6 +547,7 @@ export class App {
   private async onMenu(id: number) {
     debug('menu', id)
     switch (id) {
+      case MENU.listen: return savePrefs({ listen: this.listening.active ? 'off' : 'glasses' }).then(() => this.showFlash(prefs.listen === 'off' ? 'Stopped listening' : 'Listening to the music...'))
       case MENU.record: return this.startRecording()
       case MENU.transposeUp: return savePrefs({ transpose: wrapTranspose(prefs.transpose + 1) }).then(() => this.showFlash(`Transposed ${fmtSigned(prefs.transpose)}`))
       case MENU.transposeDown: return savePrefs({ transpose: wrapTranspose(prefs.transpose - 1) }).then(() => this.showFlash(`Transposed ${fmtSigned(prefs.transpose)}`))
@@ -507,6 +559,62 @@ export class App {
       case MENU.discardRecording: return this.finishRecording(false)
       case MENU.restartRecording: return this.startRecording()
     }
+  }
+
+  // ---------- listening ----------
+
+  private async armMic() {
+    const source = prefs.listen === 'phone' ? AudioInputSource.Phone : AudioInputSource.Glasses
+    await serial(b => b.audioControl(true, source)).catch(e => debug('mic', e))
+  }
+
+  private async startListening() {
+    await this.listening.start()
+    if (this.listening.state !== 'on') return
+    if (this.devAudioUrl) {
+      this.stopDevAudio?.()
+      this.stopDevAudio = startDevAudioStream(
+        this.devAudioUrl,
+        bytes => this.listening.audio(bytes, this.clock.position() - 60, this.clock.playing),
+        msg => { this.listening.message = msg; this.render() },
+      )
+    } else if (getBridge()) {
+      await this.armMic()
+    }
+    // Line up the chart that's already loaded.
+    const cs = this.chartState
+    if (cs.status === 'ready' && this.playback) {
+      this.listening.setChart(isTimed(cs.chart) ? null : cs.chart, this.clock.durationMs, `${this.playback.trackId}|ready`)
+    }
+  }
+
+  private async stopListening() {
+    this.stopDevAudio?.()
+    this.stopDevAudio = null
+    if (getBridge()) await serial(b => b.audioControl(false)).catch(() => {})
+    this.listening.stop()
+  }
+
+  /**
+   * When a song ends after being lined up well, keep its timing as your chart
+   * for that track, so next time it's in sync from the first chord.
+   */
+  private async saveListenedTiming() {
+    const a = this.listening.alignment
+    const cs = this.chartState
+    const p = this.playback
+    if (!a || cs.status !== 'ready' || !p || this.demo || isTimed(cs.chart)) return
+    const heardMs = a.runs.reduce((s, r) => s + (r.endMs - r.startMs), 0)
+    if (a.fit < 0.65 || heardMs < 0.6 * this.clock.durationMs) return
+    if (await hasUserChart(p.trackId)) return
+    const firstState = a.runs[0]?.state ?? 0
+    const events = [
+      // Chords before listening started stay untimed (spread from the start of the song).
+      ...a.states.slice(0, firstState).map(s => ({ t: null, chord: s.chord, section: s.section || undefined })),
+      ...a.runs.map(r => ({ t: Math.max(0, Math.round(r.startMs)), chord: a.states[r.state].chord, section: a.states[r.state].section || undefined })),
+    ]
+    await saveUserChart(p.trackId, { ...cs.chart, title: p.title, artist: p.artists, events })
+    debug('saved listened timing', p.title, events.length)
   }
 
   // ---------- recording ----------

@@ -11,6 +11,10 @@ export interface Prefs {
   chordIndexUrl: string
   /** Swap what swipe up and swipe down do. */
   swapSwipes: boolean
+  /** Listen to the music to time charts automatically: which microphone, or off. */
+  listen: 'off' | 'glasses' | 'phone'
+  /** How long sound takes from the song position to the mic (speaker/Bluetooth delay), ms. */
+  audioLatencyMs: number
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -19,6 +23,8 @@ export const DEFAULT_PREFS: Prefs = {
   bigChord: true,
   chordIndexUrl: '',
   swapSwipes: false,
+  listen: 'off',
+  audioLatencyMs: 150,
 }
 
 const KEY = 'cg.prefs'

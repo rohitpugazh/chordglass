@@ -27,6 +27,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm run fetch-model
       - run: npm test
       - name: Restore Chordonomicon download
         id: dataset
